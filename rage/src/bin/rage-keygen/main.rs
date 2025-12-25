@@ -61,7 +61,7 @@ fn generate(mut output: file_io::OutputWriter) -> io::Result<()> {
         output,
         "# {}: {}",
         fl!("identity-file-created"),
-        chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     )?;
     writeln!(output, "# {}: {}", fl!("identity-file-pubkey"), pk)?;
     writeln!(output, "{}", sk.to_string().expose_secret())?;
