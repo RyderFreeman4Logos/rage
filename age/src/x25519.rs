@@ -219,6 +219,18 @@ impl std::str::FromStr for Recipient {
     }
 }
 
+impl Recipient {
+    /// Create a Recipient from raw 32-byte X25519 public key.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(PublicKey::from(bytes))
+    }
+
+    /// Get the raw 32-byte X25519 public key.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 impl fmt::Display for Recipient {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -302,6 +314,14 @@ pub(crate) mod tests {
     fn pubkey_encoding() {
         let pk: Recipient = TEST_PK.parse().unwrap();
         assert_eq!(pk.to_string(), TEST_PK);
+    }
+
+    #[test]
+    fn recipient_bytes_round_trip() {
+        let pk: Recipient = TEST_PK.parse().unwrap();
+        let bytes = pk.as_bytes();
+        assert_eq!(*bytes, *pk.0.as_bytes());
+        assert_eq!(Recipient::from_bytes(*bytes), pk);
     }
 
     #[test]
