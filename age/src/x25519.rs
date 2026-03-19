@@ -9,7 +9,7 @@ use age_core::{
     secrecy::{ExposeSecret, SecretString},
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bech32::{ToBase32, Variant};
+use bech32::{Bech32, Hrp};
 #[cfg(feature = "bip39")]
 use bip39::Mnemonic;
 use rand::rngs::OsRng;
@@ -22,7 +22,6 @@ use crate::{
     util::{parse_bech32, read::base64_arg},
 };
 
-// Use lower-case HRP to avoid https://github.com/rust-bitcoin/rust-bech32/issues/40
 const SECRET_KEY_PREFIX: &str = "age-secret-key-";
 const PUBLIC_KEY_PREFIX: &str = "age";
 
@@ -85,15 +84,13 @@ impl Identity {
     /// Serializes this secret key as a string.
     pub fn to_string(&self) -> SecretString {
         let mut sk_bytes = self.0.to_bytes();
-        let sk_base32 = sk_bytes.to_base32();
         let mut encoded =
-            bech32::encode(SECRET_KEY_PREFIX, sk_base32, Variant::Bech32).expect("HRP is valid");
+            bech32::encode::<Bech32>(Hrp::parse_unchecked(SECRET_KEY_PREFIX), &sk_bytes)
+                .expect("HRP is valid");
         let ret = SecretString::from(encoded.to_uppercase());
 
         // Clear intermediates
         sk_bytes.zeroize();
-        // TODO: bech32::u5 doesn't implement Zeroize
-        // sk_base32.zeroize();
         encoded.zeroize();
 
         ret
@@ -236,12 +233,8 @@ impl fmt::Display for Recipient {
         write!(
             f,
             "{}",
-            bech32::encode(
-                PUBLIC_KEY_PREFIX,
-                self.0.as_bytes().to_base32(),
-                Variant::Bech32
-            )
-            .expect("HRP is valid")
+            bech32::encode::<Bech32>(Hrp::parse_unchecked(PUBLIC_KEY_PREFIX), self.0.as_bytes(),)
+                .expect("HRP is valid")
         )
     }
 }
@@ -317,6 +310,12 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn recipient_accepts_uppercase_bech32_input() {
+        let pk: Recipient = TEST_PK.to_uppercase().parse().unwrap();
+        assert_eq!(pk.to_string(), TEST_PK);
+    }
+
+    #[test]
     fn recipient_bytes_round_trip() {
         let pk: Recipient = TEST_PK.parse().unwrap();
         let bytes = pk.as_bytes();
@@ -328,6 +327,36 @@ pub(crate) mod tests {
     fn pubkey_from_secret_key() {
         let key = TEST_SK.parse::<Identity>().unwrap();
         assert_eq!(key.to_public().to_string(), TEST_PK);
+    }
+
+    #[test]
+    fn identity_accepts_lowercase_bech32_input() {
+        let key = TEST_SK.to_lowercase().parse::<Identity>().unwrap();
+        assert_eq!(key.to_string().expose_secret(), TEST_SK);
+    }
+
+    #[test]
+    fn recipient_rejects_mixed_case_bech32_input() {
+        let uppercase = TEST_PK.to_uppercase();
+        let mixed = format!(
+            "{}{}",
+            &uppercase[..1].to_ascii_lowercase(),
+            &uppercase[1..]
+        );
+
+        assert!(mixed.parse::<Recipient>().is_err());
+    }
+
+    #[test]
+    fn identity_rejects_mixed_case_bech32_input() {
+        let lowercase = TEST_SK.to_lowercase();
+        let mixed = format!(
+            "{}{}",
+            &lowercase[..1].to_ascii_uppercase(),
+            &lowercase[1..]
+        );
+
+        assert!(mixed.parse::<Identity>().is_err());
     }
 
     #[test]

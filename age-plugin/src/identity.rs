@@ -6,13 +6,11 @@ use age_core::{
     secrecy::{ExposeSecret, SecretString},
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bech32::FromBase32;
-
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io;
 
-use crate::{Callbacks, PLUGIN_IDENTITY_PREFIX};
+use crate::{parse_plugin_identity, Callbacks};
 
 const ADD_IDENTITY: &str = "add-identity";
 const RECIPIENT_STANZA: &str = "recipient-stanza";
@@ -265,28 +263,13 @@ pub(crate) fn run_v1<P: IdentityPluginV1>(mut plugin: P) -> io::Result<()> {
                 .into_iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    bech32::decode(&item)
-                        .ok()
-                        .and_then(|(hrp, data, variant)| {
-                            if hrp.starts_with(PLUGIN_IDENTITY_PREFIX)
-                                && hrp.ends_with('-')
-                                && variant == bech32::Variant::Bech32
-                            {
-                                Vec::from_base32(&data).ok().map(|data| (hrp, data))
-                            } else {
-                                None
-                            }
-                        })
+                    parse_plugin_identity(&item)
                         .ok_or_else(|| Error::Identity {
                             index,
                             message: "Invalid identity encoding".to_owned(),
                         })
-                        .and_then(|(hrp, bytes)| {
-                            plugin.add_identity(
-                                index,
-                                &hrp[PLUGIN_IDENTITY_PREFIX.len()..hrp.len() - 1],
-                                &bytes,
-                            )
+                        .and_then(|(plugin_name, bytes)| {
+                            plugin.add_identity(index, &plugin_name, &bytes)
                         })
                 })
                 .filter_map(|res| res.err())

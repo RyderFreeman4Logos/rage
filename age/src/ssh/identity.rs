@@ -9,8 +9,8 @@ use nom::{
     bytes::streaming::{is_not, tag},
     character::streaming::{line_ending, newline},
     combinator::{map_opt, opt},
-    sequence::{pair, preceded, terminated, tuple},
-    IResult,
+    sequence::{pair, preceded, terminated},
+    IResult, Parser,
 };
 use rand::rngs::OsRng;
 use rsa::{pkcs1::DecodeRsaPrivateKey, Oaep};
@@ -63,7 +63,7 @@ impl UnencryptedKey {
     pub(crate) fn unwrap_stanza(&self, stanza: &Stanza) -> Option<Result<FileKey, DecryptError>> {
         match (self, stanza.tag.as_str()) {
             (UnencryptedKey::SshRsa(ssh_key, sk), SSH_RSA_RECIPIENT_TAG) => {
-                let tag = base64_arg::<_, TAG_LEN_BYTES, 6>(stanza.args.get(0)?)?;
+                let tag = base64_arg::<_, TAG_LEN_BYTES, 6>(stanza.args.first()?)?;
                 if ssh_tag(ssh_key) != tag {
                     return None;
                 }
@@ -95,7 +95,7 @@ impl UnencryptedKey {
                 )
             }
             (UnencryptedKey::SshEd25519(ssh_key, privkey), SSH_ED25519_RECIPIENT_TAG) => {
-                let tag = base64_arg::<_, TAG_LEN_BYTES, 6>(stanza.args.get(0)?)?;
+                let tag = base64_arg::<_, TAG_LEN_BYTES, 6>(stanza.args.first()?)?;
                 if ssh_tag(ssh_key) != tag {
                     return None;
                 }
@@ -322,9 +322,10 @@ impl<C: Callbacks> crate::Identity for DecryptableIdentity<C> {
 
 fn rsa_pem_encryption_header(input: &str) -> IResult<&str, &str> {
     preceded(
-        tuple((tag("Proc-Type: 4,ENCRYPTED"), newline, tag("DEK-Info: "))),
+        (tag("Proc-Type: 4,ENCRYPTED"), newline, tag("DEK-Info: ")),
         terminated(is_not("\n"), newline),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn rsa_privkey(input: &str) -> IResult<&str, Identity> {
@@ -356,7 +357,8 @@ fn rsa_privkey(input: &str) -> IResult<&str, Identity> {
             ),
             pair(line_ending, tag("-----END RSA PRIVATE KEY-----")),
         ),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn openssh_privkey(input: &str) -> IResult<&str, Identity> {
@@ -368,11 +370,12 @@ fn openssh_privkey(input: &str) -> IResult<&str, Identity> {
             }),
             pair(line_ending, tag("-----END OPENSSH PRIVATE KEY-----")),
         ),
-    )(input)
+    )
+    .parse(input)
 }
 
 pub(crate) fn ssh_identity(input: &str) -> IResult<&str, Identity> {
-    alt((rsa_privkey, openssh_privkey))(input)
+    alt((rsa_privkey, openssh_privkey)).parse(input)
 }
 
 #[cfg(test)]
