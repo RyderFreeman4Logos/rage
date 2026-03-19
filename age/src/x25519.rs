@@ -9,7 +9,7 @@ use age_core::{
     secrecy::{ExposeSecret, SecretString},
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bech32::{ToBase32, Variant};
+use bech32::{Bech32, Hrp};
 #[cfg(feature = "bip39")]
 use bip39::Mnemonic;
 use rand::rngs::OsRng;
@@ -22,8 +22,7 @@ use crate::{
     util::{parse_bech32, read::base64_arg},
 };
 
-// Use lower-case HRP to avoid https://github.com/rust-bitcoin/rust-bech32/issues/40
-const SECRET_KEY_PREFIX: &str = "age-secret-key-";
+const SECRET_KEY_PREFIX: &str = "AGE-SECRET-KEY-";
 const PUBLIC_KEY_PREFIX: &str = "age";
 
 pub(super) const X25519_RECIPIENT_TAG: &str = "X25519";
@@ -85,15 +84,13 @@ impl Identity {
     /// Serializes this secret key as a string.
     pub fn to_string(&self) -> SecretString {
         let mut sk_bytes = self.0.to_bytes();
-        let sk_base32 = sk_bytes.to_base32();
         let mut encoded =
-            bech32::encode(SECRET_KEY_PREFIX, sk_base32, Variant::Bech32).expect("HRP is valid");
+            bech32::encode::<Bech32>(Hrp::parse_unchecked(SECRET_KEY_PREFIX), &sk_bytes)
+                .expect("HRP is valid");
         let ret = SecretString::from(encoded.to_uppercase());
 
         // Clear intermediates
         sk_bytes.zeroize();
-        // TODO: bech32::u5 doesn't implement Zeroize
-        // sk_base32.zeroize();
         encoded.zeroize();
 
         ret
@@ -236,12 +233,8 @@ impl fmt::Display for Recipient {
         write!(
             f,
             "{}",
-            bech32::encode(
-                PUBLIC_KEY_PREFIX,
-                self.0.as_bytes().to_base32(),
-                Variant::Bech32
-            )
-            .expect("HRP is valid")
+            bech32::encode::<Bech32>(Hrp::parse_unchecked(PUBLIC_KEY_PREFIX), self.0.as_bytes(),)
+                .expect("HRP is valid")
         )
     }
 }
