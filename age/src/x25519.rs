@@ -22,7 +22,7 @@ use crate::{
     util::{parse_bech32, read::base64_arg},
 };
 
-const SECRET_KEY_PREFIX: &str = "AGE-SECRET-KEY-";
+const SECRET_KEY_PREFIX: &str = "age-secret-key-";
 const PUBLIC_KEY_PREFIX: &str = "age";
 
 pub(super) const X25519_RECIPIENT_TAG: &str = "X25519";
@@ -310,6 +310,12 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn recipient_accepts_uppercase_bech32_input() {
+        let pk: Recipient = TEST_PK.to_uppercase().parse().unwrap();
+        assert_eq!(pk.to_string(), TEST_PK);
+    }
+
+    #[test]
     fn recipient_bytes_round_trip() {
         let pk: Recipient = TEST_PK.parse().unwrap();
         let bytes = pk.as_bytes();
@@ -321,6 +327,36 @@ pub(crate) mod tests {
     fn pubkey_from_secret_key() {
         let key = TEST_SK.parse::<Identity>().unwrap();
         assert_eq!(key.to_public().to_string(), TEST_PK);
+    }
+
+    #[test]
+    fn identity_accepts_lowercase_bech32_input() {
+        let key = TEST_SK.to_lowercase().parse::<Identity>().unwrap();
+        assert_eq!(key.to_string().expose_secret(), TEST_SK);
+    }
+
+    #[test]
+    fn recipient_rejects_mixed_case_bech32_input() {
+        let uppercase = TEST_PK.to_uppercase();
+        let mixed = format!(
+            "{}{}",
+            &uppercase[..1].to_ascii_lowercase(),
+            &uppercase[1..]
+        );
+
+        assert!(mixed.parse::<Recipient>().is_err());
+    }
+
+    #[test]
+    fn identity_rejects_mixed_case_bech32_input() {
+        let lowercase = TEST_SK.to_lowercase();
+        let mixed = format!(
+            "{}{}",
+            &lowercase[..1].to_ascii_uppercase(),
+            &lowercase[1..]
+        );
+
+        assert!(mixed.parse::<Identity>().is_err());
     }
 
     #[test]

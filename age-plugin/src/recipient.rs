@@ -6,13 +6,12 @@ use age_core::{
     secrecy::SecretString,
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bech32::{primitives::decode::CheckedHrpstring, Bech32};
 
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::io;
 
-use crate::{Callbacks, PLUGIN_IDENTITY_PREFIX, PLUGIN_RECIPIENT_PREFIX};
+use crate::{parse_plugin_identity, parse_plugin_recipient, Callbacks};
 
 const ADD_RECIPIENT: &str = "add-recipient";
 const ADD_IDENTITY: &str = "add-identity";
@@ -331,7 +330,7 @@ pub(crate) fn run_v1<P: RecipientPluginV1>(mut plugin: P) -> io::Result<()> {
     // and add them to the plugin.
     fn parse_and_add(
         items: Result<Vec<String>, Vec<Error>>,
-        plugin_name: impl Fn(&str) -> Option<&str>,
+        parser: impl Fn(&str) -> Option<(String, Vec<u8>)>,
         error: impl Fn(usize) -> Error,
         mut adder: impl FnMut(usize, &str, Vec<u8>) -> Result<(), Error>,
     ) -> Result<usize, Vec<Error>> {
@@ -341,16 +340,9 @@ pub(crate) fn run_v1<P: RecipientPluginV1>(mut plugin: P) -> io::Result<()> {
                 .into_iter()
                 .enumerate()
                 .map(|(index, item)| {
-                    let decoded = CheckedHrpstring::new::<Bech32>(&item).ok();
-                    decoded
-                        .map(|parsed| (parsed.hrp(), parsed))
-                        .as_ref()
-                        .and_then(|(hrp, parsed)| {
-                            plugin_name(hrp.as_str())
-                                .map(|plugin_name| (plugin_name, parsed.byte_iter().collect()))
-                        })
+                    parser(&item)
                         .ok_or_else(|| error(index))
-                        .and_then(|(plugin_name, bytes)| adder(index, plugin_name, bytes))
+                        .and_then(|(plugin_name, bytes)| adder(index, &plugin_name, bytes))
                 })
                 .filter_map(|res| res.err())
                 .collect();
@@ -364,7 +356,7 @@ pub(crate) fn run_v1<P: RecipientPluginV1>(mut plugin: P) -> io::Result<()> {
     }
     let recipients = parse_and_add(
         recipients,
-        |hrp| hrp.strip_prefix(PLUGIN_RECIPIENT_PREFIX),
+        parse_plugin_recipient,
         |index| Error::Recipient {
             index,
             message: "Invalid recipient encoding".to_owned(),
@@ -373,13 +365,7 @@ pub(crate) fn run_v1<P: RecipientPluginV1>(mut plugin: P) -> io::Result<()> {
     );
     let identities = parse_and_add(
         identities,
-        |hrp| {
-            if hrp.starts_with(PLUGIN_IDENTITY_PREFIX) && hrp.ends_with('-') {
-                Some(&hrp[PLUGIN_IDENTITY_PREFIX.len()..hrp.len() - 1])
-            } else {
-                None
-            }
-        },
+        parse_plugin_identity,
         |index| Error::Identity {
             index,
             message: "Invalid identity encoding".to_owned(),

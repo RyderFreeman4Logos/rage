@@ -42,8 +42,10 @@ jobs:
           - age-core
           - age-plugin
           - rage
-        # Only filter if a specific package was requested via workflow_dispatch
-        # For push/pull_request events, inputs.package is undefined, so default to 'all'
+        # Only filter if a specific package was requested via workflow_dispatch.
+        # `case()` is a documented GitHub Actions expression function; here it emits
+        # either the package to exclude or a sentinel when the manual input is `all`.
+        # For push/pull_request events, inputs.package is undefined, so default to `all`.
         exclude:
           - package: ${{ case((github.event.inputs.package || 'all') != 'all' && (github.event.inputs.package || 'all') != 'age',        'age',        'NONE') }}
           - package: ${{ case((github.event.inputs.package || 'all') != 'all' && (github.event.inputs.package || 'all') != 'age-core',   'age-core',   'NONE') }}

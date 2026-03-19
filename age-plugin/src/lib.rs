@@ -179,7 +179,7 @@
 #![deny(missing_docs)]
 
 use age_core::secrecy::SecretString;
-use bech32::{Bech32, Hrp};
+use bech32::{primitives::decode::CheckedHrpstring, Bech32, Hrp};
 use std::io;
 
 pub mod identity;
@@ -188,6 +188,45 @@ pub mod recipient;
 // Plugin HRPs are age1[name] and AGE-PLUGIN-[NAME]-
 const PLUGIN_RECIPIENT_PREFIX: &str = "age1";
 const PLUGIN_IDENTITY_PREFIX: &str = "age-plugin-";
+
+fn encode_plugin_recipient(plugin_name: &str, recipient: &[u8]) -> String {
+    bech32::encode::<Bech32>(
+        Hrp::parse_unchecked(&format!("{}{}", PLUGIN_RECIPIENT_PREFIX, plugin_name)),
+        recipient,
+    )
+    .expect("HRP is valid")
+}
+
+fn encode_plugin_identity(plugin_name: &str, identity: &[u8]) -> String {
+    bech32::encode::<Bech32>(
+        Hrp::parse_unchecked(&format!("{}{}-", PLUGIN_IDENTITY_PREFIX, plugin_name)),
+        identity,
+    )
+    .expect("HRP is valid")
+    .to_uppercase()
+}
+
+fn parse_plugin_value(value: &str, prefix: &str, suffix: &str) -> Option<(String, Vec<u8>)> {
+    CheckedHrpstring::new::<Bech32>(value)
+        .ok()
+        .and_then(|parsed| {
+            let hrp = parsed.hrp().as_str().to_ascii_lowercase();
+            if hrp.starts_with(prefix) && hrp.ends_with(suffix) {
+                let plugin_name = &hrp[prefix.len()..hrp.len() - suffix.len()];
+                Some((plugin_name.to_owned(), parsed.byte_iter().collect()))
+            } else {
+                None
+            }
+        })
+}
+
+pub(crate) fn parse_plugin_recipient(recipient: &str) -> Option<(String, Vec<u8>)> {
+    parse_plugin_value(recipient, PLUGIN_RECIPIENT_PREFIX, "")
+}
+
+pub(crate) fn parse_plugin_identity(identity: &str) -> Option<(String, Vec<u8>)> {
+    parse_plugin_value(identity, PLUGIN_IDENTITY_PREFIX, "-")
+}
 
 /// Prints the newly-created identity and corresponding recipient to standard out.
 ///
@@ -199,21 +238,9 @@ pub fn print_new_identity(plugin_name: &str, identity: &[u8], recipient: &[u8]) 
     );
     println!(
         "# recipient: {}",
-        bech32::encode::<Bech32>(
-            Hrp::parse_unchecked(&format!("{}{}", PLUGIN_RECIPIENT_PREFIX, plugin_name)),
-            recipient,
-        )
-        .expect("HRP is valid")
+        encode_plugin_recipient(plugin_name, recipient)
     );
-    println!(
-        "{}",
-        bech32::encode::<Bech32>(
-            Hrp::parse_unchecked(&format!("{}{}-", PLUGIN_IDENTITY_PREFIX, plugin_name)),
-            identity,
-        )
-        .expect("HRP is valid")
-        .to_uppercase()
-    );
+    println!("{}", encode_plugin_identity(plugin_name, identity));
 }
 
 /// Runs the plugin state machine defined by `state_machine`.
@@ -353,4 +380,60 @@ pub trait Callbacks<E> {
     /// out how errors should be handled overall, and how to distinguish between hard and
     /// soft errors.
     fn error(&mut self, error: E) -> age_core::plugin::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        encode_plugin_identity, encode_plugin_recipient, parse_plugin_identity,
+        parse_plugin_recipient,
+    };
+
+    #[test]
+    fn plugin_identity_round_trip_parses_canonical_uppercase_hrp() {
+        let identity = [1, 2, 3, 4, 5];
+        let encoded = encode_plugin_identity("example", &identity);
+
+        let (plugin_name, parsed_identity) =
+            parse_plugin_identity(&encoded).expect("canonical plugin identity should parse");
+
+        assert_eq!(plugin_name, "example");
+        assert_eq!(parsed_identity, identity);
+    }
+
+    #[test]
+    fn plugin_identity_accepts_lowercase_hrp() {
+        let identity = [1, 2, 3, 4, 5];
+        let encoded = encode_plugin_identity("example", &identity).to_lowercase();
+
+        let (plugin_name, parsed_identity) =
+            parse_plugin_identity(&encoded).expect("lowercase plugin identity should parse");
+
+        assert_eq!(plugin_name, "example");
+        assert_eq!(parsed_identity, identity);
+    }
+
+    #[test]
+    fn plugin_recipient_accepts_uppercase_hrp() {
+        let recipient = [1, 2, 3, 4, 5];
+        let encoded = encode_plugin_recipient("example", &recipient).to_uppercase();
+
+        let (plugin_name, parsed_recipient) =
+            parse_plugin_recipient(&encoded).expect("uppercase plugin recipient should parse");
+
+        assert_eq!(plugin_name, "example");
+        assert_eq!(parsed_recipient, recipient);
+    }
+
+    #[test]
+    fn plugin_recipient_rejects_mixed_case_strings() {
+        let uppercase = encode_plugin_recipient("example", &[1, 2, 3, 4, 5]).to_uppercase();
+        let mixed = format!(
+            "{}{}",
+            &uppercase[..1].to_ascii_lowercase(),
+            &uppercase[1..]
+        );
+
+        assert!(parse_plugin_recipient(&mixed).is_none());
+    }
 }

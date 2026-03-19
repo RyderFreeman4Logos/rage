@@ -29,7 +29,7 @@ use crate::{
 
 // Plugin HRPs are age1[name] and AGE-PLUGIN-[NAME]-
 const PLUGIN_RECIPIENT_PREFIX: &str = "age1";
-const PLUGIN_IDENTITY_PREFIX: &str = "AGE-PLUGIN-";
+const PLUGIN_IDENTITY_PREFIX: &str = "age-plugin-";
 
 const CMD_ERROR: &str = "error";
 const CMD_RECIPIENT_STANZA: &str = "recipient-stanza";
@@ -55,7 +55,30 @@ fn binary_name(plugin_name: &str) -> String {
     format!("age-plugin-{}", plugin_name)
 }
 
-struct SlowPluginGuard(mpsc::Sender<()>);
+fn recipient_plugin_name_from_hrp(hrp: &str) -> Option<String> {
+    if hrp.len() > PLUGIN_RECIPIENT_PREFIX.len() && hrp.starts_with(PLUGIN_RECIPIENT_PREFIX) {
+        Some(hrp.split_at(PLUGIN_RECIPIENT_PREFIX.len()).1.to_owned())
+    } else {
+        None
+    }
+}
+
+fn identity_plugin_name_from_hrp(hrp: &str) -> Option<String> {
+    if hrp.len() > PLUGIN_IDENTITY_PREFIX.len() && hrp.starts_with(PLUGIN_IDENTITY_PREFIX) {
+        Some(
+            hrp.split_at(PLUGIN_IDENTITY_PREFIX.len())
+                .1
+                .trim_end_matches('-')
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
+struct SlowPluginGuard {
+    _send: mpsc::Sender<()>,
+}
 
 impl SlowPluginGuard {
     /// Starts a thread to print out a progress message after 10 seconds if the plugin
@@ -88,7 +111,7 @@ impl SlowPluginGuard {
             }
         });
 
-        SlowPluginGuard(send)
+        SlowPluginGuard { _send: send }
     }
 }
 
@@ -109,10 +132,7 @@ impl std::str::FromStr for Recipient {
         parse_bech32(s)
             .ok_or("invalid Bech32 encoding")
             .and_then(|(hrp, _)| {
-                if hrp.len() > PLUGIN_RECIPIENT_PREFIX.len()
-                    && hrp.starts_with(PLUGIN_RECIPIENT_PREFIX)
-                {
-                    let name = hrp.split_at(PLUGIN_RECIPIENT_PREFIX.len()).1.to_owned();
+                if let Some(name) = recipient_plugin_name_from_hrp(&hrp) {
                     if valid_plugin_name(&name) {
                         Ok(Recipient {
                             name,
@@ -158,15 +178,7 @@ impl std::str::FromStr for Identity {
         parse_bech32(s)
             .ok_or("invalid Bech32 encoding")
             .and_then(|(hrp, _)| {
-                if hrp.len() > PLUGIN_IDENTITY_PREFIX.len()
-                    && hrp.starts_with(PLUGIN_IDENTITY_PREFIX)
-                {
-                    // TODO: Decide whether to allow plugin names to end in -
-                    let name = hrp
-                        .split_at(PLUGIN_IDENTITY_PREFIX.len())
-                        .1
-                        .trim_end_matches('-')
-                        .to_owned();
+                if let Some(name) = identity_plugin_name_from_hrp(&hrp) {
                     if valid_plugin_name(&name) {
                         Ok(Identity {
                             name,
@@ -798,6 +810,76 @@ mod tests {
         .expect("HRP is valid")
         .to_uppercase();
         assert!(invalid_identity.parse::<Identity>().is_err());
+    }
+
+    #[test]
+    fn recipient_accepts_lowercase_bech32_input() {
+        let recipient = bech32::encode::<Bech32>(
+            Hrp::parse_unchecked(&format!("{}foobar", PLUGIN_RECIPIENT_PREFIX)),
+            &[],
+        )
+        .expect("HRP is valid");
+
+        assert_eq!(recipient.parse::<Recipient>().unwrap().plugin(), "foobar");
+    }
+
+    #[test]
+    fn recipient_accepts_uppercase_bech32_input() {
+        let recipient = bech32::encode::<Bech32>(
+            Hrp::parse_unchecked(&format!("{}foobar", PLUGIN_RECIPIENT_PREFIX)),
+            &[],
+        )
+        .expect("HRP is valid")
+        .to_uppercase();
+
+        assert_eq!(recipient.parse::<Recipient>().unwrap().plugin(), "foobar");
+    }
+
+    #[test]
+    fn identity_accepts_uppercase_bech32_input() {
+        let identity = Identity::default_for_plugin("foobar").to_string();
+
+        assert_eq!(identity.parse::<Identity>().unwrap().plugin(), "foobar");
+    }
+
+    #[test]
+    fn identity_accepts_lowercase_bech32_input() {
+        let identity = Identity::default_for_plugin("foobar")
+            .to_string()
+            .to_lowercase();
+
+        assert_eq!(identity.parse::<Identity>().unwrap().plugin(), "foobar");
+    }
+
+    #[test]
+    fn recipient_rejects_mixed_case_bech32_input() {
+        let uppercase = bech32::encode::<Bech32>(
+            Hrp::parse_unchecked(&format!("{}foobar", PLUGIN_RECIPIENT_PREFIX)),
+            &[],
+        )
+        .expect("HRP is valid")
+        .to_uppercase();
+        let mixed = format!(
+            "{}{}",
+            &uppercase[..1].to_ascii_lowercase(),
+            &uppercase[1..]
+        );
+
+        assert!(mixed.parse::<Recipient>().is_err());
+    }
+
+    #[test]
+    fn identity_rejects_mixed_case_bech32_input() {
+        let lowercase = Identity::default_for_plugin("foobar")
+            .to_string()
+            .to_lowercase();
+        let mixed = format!(
+            "{}{}",
+            &lowercase[..1].to_ascii_uppercase(),
+            &lowercase[1..]
+        );
+
+        assert!(mixed.parse::<Identity>().is_err());
     }
 
     #[test]
