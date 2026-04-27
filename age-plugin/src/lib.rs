@@ -178,8 +178,11 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(missing_docs)]
 
-use age_core::secrecy::SecretString;
-use bech32::{primitives::decode::CheckedHrpstring, Bech32, Hrp};
+use age_core::{
+    primitives::{bech32_decode, bech32_encode},
+    secrecy::{zeroize::Zeroize, SecretString},
+};
+use bech32::Hrp;
 use std::io;
 
 pub mod identity;
@@ -190,34 +193,35 @@ const PLUGIN_RECIPIENT_PREFIX: &str = "age1";
 const PLUGIN_IDENTITY_PREFIX: &str = "age-plugin-";
 
 fn encode_plugin_recipient(plugin_name: &str, recipient: &[u8]) -> String {
-    bech32::encode::<Bech32>(
+    bech32_encode(
         Hrp::parse_unchecked(&format!("{}{}", PLUGIN_RECIPIENT_PREFIX, plugin_name)),
         recipient,
     )
-    .expect("HRP is valid")
 }
 
 fn encode_plugin_identity(plugin_name: &str, identity: &[u8]) -> String {
-    bech32::encode::<Bech32>(
+    bech32_encode(
         Hrp::parse_unchecked(&format!("{}{}-", PLUGIN_IDENTITY_PREFIX, plugin_name)),
         identity,
     )
-    .expect("HRP is valid")
-    .to_uppercase()
 }
 
 fn parse_plugin_value(value: &str, prefix: &str, suffix: &str) -> Option<(String, Vec<u8>)> {
-    CheckedHrpstring::new::<Bech32>(value)
-        .ok()
-        .and_then(|parsed| {
-            let hrp = parsed.hrp().as_str().to_ascii_lowercase();
+    bech32_decode(
+        value,
+        |_| (),
+        |_| Ok(()),
+        |hrp, bytes| {
+            let hrp = hrp.as_str().to_ascii_lowercase();
             if hrp.starts_with(prefix) && hrp.ends_with(suffix) {
                 let plugin_name = &hrp[prefix.len()..hrp.len() - suffix.len()];
-                Some((plugin_name.to_owned(), parsed.byte_iter().collect()))
+                Ok((plugin_name.to_owned(), bytes.collect()))
             } else {
-                None
+                Err(())
             }
-        })
+        },
+    )
+    .ok()
 }
 
 pub(crate) fn parse_plugin_recipient(recipient: &str) -> Option<(String, Vec<u8>)> {
@@ -232,6 +236,8 @@ pub(crate) fn parse_plugin_identity(identity: &str) -> Option<(String, Vec<u8>)>
 ///
 /// A "created" time is included in the output, set to the current local time.
 pub fn print_new_identity(plugin_name: &str, identity: &[u8], recipient: &[u8]) {
+    let mut identity_lower = encode_plugin_identity(plugin_name, identity);
+
     println!(
         "# created: {}",
         chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -240,7 +246,9 @@ pub fn print_new_identity(plugin_name: &str, identity: &[u8], recipient: &[u8]) 
         "# recipient: {}",
         encode_plugin_recipient(plugin_name, recipient)
     );
-    println!("{}", encode_plugin_identity(plugin_name, identity));
+    println!("{}", identity_lower.to_uppercase());
+
+    identity_lower.zeroize();
 }
 
 /// Runs the plugin state machine defined by `state_machine`.
@@ -392,7 +400,7 @@ mod tests {
     #[test]
     fn plugin_identity_round_trip_parses_canonical_uppercase_hrp() {
         let identity = [1, 2, 3, 4, 5];
-        let encoded = encode_plugin_identity("example", &identity);
+        let encoded = encode_plugin_identity("example", &identity).to_uppercase();
 
         let (plugin_name, parsed_identity) =
             parse_plugin_identity(&encoded).expect("canonical plugin identity should parse");
@@ -404,7 +412,7 @@ mod tests {
     #[test]
     fn plugin_identity_accepts_lowercase_hrp() {
         let identity = [1, 2, 3, 4, 5];
-        let encoded = encode_plugin_identity("example", &identity).to_lowercase();
+        let encoded = encode_plugin_identity("example", &identity);
 
         let (plugin_name, parsed_identity) =
             parse_plugin_identity(&encoded).expect("lowercase plugin identity should parse");
