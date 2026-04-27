@@ -1,15 +1,15 @@
-//! The "x25519" recipient type, native to age.
+//! The classic recipient type, native to age.
 
 use std::collections::HashSet;
 use std::fmt;
 
 use age_core::{
     format::{FileKey, Stanza, FILE_KEY_BYTES},
-    primitives::{aead_decrypt, aead_encrypt, hkdf},
+    primitives::{aead_decrypt, aead_encrypt, bech32_encode, bech32_encode_to_fmt, hkdf},
     secrecy::{ExposeSecret, SecretString},
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bech32::{Bech32, Hrp};
+use bech32::Hrp;
 #[cfg(feature = "bip39")]
 use bip39::Mnemonic;
 use rand::rngs::OsRng;
@@ -28,10 +28,10 @@ const PUBLIC_KEY_PREFIX: &str = "age";
 pub(super) const X25519_RECIPIENT_TAG: &str = "X25519";
 const X25519_RECIPIENT_KEY_LABEL: &[u8] = b"age-encryption.org/v1/X25519";
 
-pub(super) const EPK_LEN_BYTES: usize = 32;
-pub(super) const ENCRYPTED_FILE_KEY_BYTES: usize = FILE_KEY_BYTES + 16;
+pub(crate) const EPK_LEN_BYTES: usize = 32;
+pub(crate) const ENCRYPTED_FILE_KEY_BYTES: usize = FILE_KEY_BYTES + 16;
 
-/// The standard age identity type, which can decrypt files encrypted to the corresponding
+/// The classic age identity type, which can decrypt files encrypted to the corresponding
 /// [`Recipient`].
 #[derive(Clone)]
 pub struct Identity(StaticSecret);
@@ -43,12 +43,16 @@ impl std::str::FromStr for Identity {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_bech32(s)
             .ok_or("invalid Bech32 encoding")
-            .and_then(|(hrp, bytes)| {
+            .and_then(|(hrp, mut bytes)| {
                 if hrp == SECRET_KEY_PREFIX {
-                    TryInto::<[u8; 32]>::try_into(&bytes[..])
+                    let identity = TryInto::<[u8; 32]>::try_into(bytes.as_slice())
                         .map_err(|_| "incorrect identity length")
                         .map(StaticSecret::from)
-                        .map(Identity)
+                        .map(Identity);
+
+                    bytes.zeroize();
+
+                    identity
                 } else {
                     Err("incorrect HRP")
                 }
@@ -84,9 +88,7 @@ impl Identity {
     /// Serializes this secret key as a string.
     pub fn to_string(&self) -> SecretString {
         let mut sk_bytes = self.0.to_bytes();
-        let mut encoded =
-            bech32::encode::<Bech32>(Hrp::parse_unchecked(SECRET_KEY_PREFIX), &sk_bytes)
-                .expect("HRP is valid");
+        let mut encoded = bech32_encode(Hrp::parse_unchecked(SECRET_KEY_PREFIX), &sk_bytes);
         let ret = SecretString::from(encoded.to_uppercase());
 
         // Clear intermediates
@@ -123,8 +125,6 @@ impl Identity {
     ///
     /// The mnemonic is generated using the English wordlist.
     pub fn to_mnemonic(&self) -> Mnemonic {
-        // We can safely unwrap because the secret key is guaranteed to be 32 bytes,
-        // which is a valid length for BIP39 entropy.
         Mnemonic::from_entropy(&self.0.to_bytes()).expect("32 bytes is valid entropy")
     }
 }
@@ -188,7 +188,7 @@ impl crate::Identity for Identity {
     }
 }
 
-/// The standard age recipient type. Files encrypted to this recipient can be decrypted
+/// The classic age recipient type. Files encrypted to this recipient can be decrypted
 /// with the corresponding [`Identity`].
 ///
 /// This recipient type is anonymous, in the sense that an attacker can't tell from the
@@ -205,7 +205,7 @@ impl std::str::FromStr for Recipient {
             .ok_or("invalid Bech32 encoding")
             .and_then(|(hrp, bytes)| {
                 if hrp == PUBLIC_KEY_PREFIX {
-                    TryInto::<[u8; 32]>::try_into(&bytes[..])
+                    TryInto::<[u8; 32]>::try_into(bytes)
                         .map_err(|_| "incorrect pubkey length")
                         .map(PublicKey::from)
                         .map(Recipient)
@@ -230,11 +230,10 @@ impl Recipient {
 
 impl fmt::Display for Recipient {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
+        bech32_encode_to_fmt(
             f,
-            "{}",
-            bech32::encode::<Bech32>(Hrp::parse_unchecked(PUBLIC_KEY_PREFIX), self.0.as_bytes(),)
-                .expect("HRP is valid")
+            Hrp::parse_unchecked(PUBLIC_KEY_PREFIX),
+            self.0.as_bytes(),
         )
     }
 }
@@ -383,7 +382,6 @@ pub(crate) mod tests {
     #[cfg(feature = "bip39")]
     #[test]
     fn invalid_mnemonic_length() {
-        // Generate a 12-word mnemonic (128 bits of entropy)
         let entropy = [0u8; 16];
         let mnemonic = bip39::Mnemonic::from_entropy(&entropy).unwrap();
 

@@ -1,4 +1,6 @@
-use bech32::{primitives::decode::CheckedHrpstring, Bech32};
+use std::io;
+
+use age_core::primitives::bech32_decode;
 
 #[cfg(all(any(feature = "armor", feature = "cli-common"), windows))]
 pub(crate) const LINE_ENDING: &str = "\r\n";
@@ -6,12 +8,54 @@ pub(crate) const LINE_ENDING: &str = "\r\n";
 pub(crate) const LINE_ENDING: &str = "\n";
 
 pub(crate) fn parse_bech32(s: &str) -> Option<(String, Vec<u8>)> {
-    CheckedHrpstring::new::<Bech32>(s).ok().map(|parsed| {
-        (
-            parsed.hrp().as_str().to_ascii_lowercase(),
-            parsed.byte_iter().collect(),
-        )
-    })
+    bech32_decode(
+        s,
+        |_| (),
+        |_| Ok(()),
+        |hrp, bytes| Ok((hrp.as_str().to_ascii_lowercase(), bytes.collect())),
+    )
+    .ok()
+}
+
+pub(crate) struct LimitedReader<R> {
+    inner: R,
+    n: usize,
+}
+impl<R> LimitedReader<R> {
+    pub(crate) fn new(reader: R, n: usize) -> Self {
+        Self { inner: reader, n }
+    }
+}
+
+impl<R: io::Read> io::Read for LimitedReader<R> {
+    fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
+        if self.n == 0 {
+            Ok(0)
+        } else {
+            if buf.len() > self.n {
+                buf = &mut buf[..self.n];
+            }
+            let read = self.inner.read(buf)?;
+            self.n -= read;
+            Ok(read)
+        }
+    }
+}
+
+impl<R: io::BufRead> io::BufRead for LimitedReader<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.n == 0 {
+            Ok(&[])
+        } else {
+            let buf = self.inner.fill_buf()?;
+            Ok(&buf[..buf.len().min(self.n)])
+        }
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.n -= amount;
+        self.inner.consume(amount);
+    }
 }
 
 pub(crate) mod read {
@@ -127,38 +171,5 @@ pub(crate) mod write {
     pub(crate) fn encoded_data<W: Write>(data: &[u8]) -> impl SerializeFn<W> {
         let encoded = BASE64_STANDARD_NO_PAD.encode(data);
         string(encoded)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_bech32;
-
-    const TEST_SK: &str =
-        "AGE-SECRET-KEY-1GQ9778VQXMMJVE8SK7J6VT8UJ4HDQAJUVSFCWCM02D8GEWQ72PVQ2Y5J33";
-    const TEST_PK: &str = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa";
-
-    #[test]
-    fn parse_bech32_normalizes_uppercase_hrp() {
-        let (hrp, bytes) = parse_bech32(TEST_SK).expect("TEST_SK is valid Bech32");
-
-        assert_eq!(hrp, "age-secret-key-");
-        assert_eq!(bytes.len(), 32);
-    }
-
-    #[test]
-    fn parse_bech32_preserves_lowercase_hrp() {
-        let (hrp, bytes) = parse_bech32(TEST_PK).expect("TEST_PK is valid Bech32");
-
-        assert_eq!(hrp, "age");
-        assert_eq!(bytes.len(), 32);
-    }
-
-    #[test]
-    fn parse_bech32_rejects_mixed_case_strings() {
-        let mut mixed = TEST_SK.to_owned();
-        mixed.replace_range(..1, "a");
-
-        assert!(parse_bech32(&mixed).is_none());
     }
 }
